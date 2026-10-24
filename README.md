@@ -46,6 +46,8 @@ It comes with what almost every app needs (register, log in, log out, protected 
 
 ## Clean Architecture in 1 minute
 
+_For developers. For everyone else: [Clean Architecture, explained simply](#clean-architecture-explained-simply-no-coding-needed)._
+
 The code is split into four layers. Each layer only uses the layers **inside** it:
 
 ```
@@ -75,6 +77,233 @@ PUT /api/notes/:id
 ```
 
 The website uses the same idea: `infrastructure/api` (fetch calls) → `application` (TanStack Query hooks) → `presentation` (components and pages).
+
+New to this? The next section explains it with a restaurant and one real example, no coding needed.
+
+---
+
+## Clean Architecture, explained simply (no coding needed)
+
+The section above is the short version for developers. This one explains the same idea for anyone: a manager, a designer, a client, or a developer who's new to it.
+
+### The idea: the app is a restaurant
+
+A restaurant works because everyone has **one job**, and they don't need to know how the others do theirs. The waiter doesn't cook. The chef doesn't care which brand the fridge is. The recipes stay the same if you buy a new oven.
+
+This app is split the same way, into four **layers** (groups of files, each with one job):
+
+| Layer              | In the restaurant, it's…                                                                                      | In this app, it…                                                                                                                                        | Folder                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **Domain**         | The **recipe book and the house rules**: what a dish is, what's allowed                                       | Says what a **note** and a **user** are, and the rules: "a note belongs to the person who wrote it", "usernames ignore capital letters"                 | `apps/api/src/domain/`         |
+| **Application**    | The **head chef's steps** for each order: "to make a pasta: get the pasta, boil it, add the sauce"            | Has one file per thing a person can do: **register**, **log in**, **create a note**, **edit a note**, **delete a note**                                 | `apps/api/src/application/`    |
+| **Infrastructure** | The **equipment and suppliers**: the fridge, the oven, the lock on the door                                   | The real tools: the **PostgreSQL database** (where notes are stored), **bcrypt** (locks passwords), the **clock**                                       | `apps/api/src/infrastructure/` |
+| **Presentation**   | The **waiter at the front counter**: takes the order, checks you're a member, brings the plate or the apology | Talks to the outside world over the internet: reads **requests** from the website, checks the login, sends back **answers** like "saved" or "not found" | `apps/api/src/presentation/`   |
+
+And two helpers:
+
+|                                            | In the restaurant, it's…                                                                   | In this app                                                                                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| **`buildApp.ts`** (the "composition root") | The **manager on opening day**, who hires everyone and tells each chef which fridge to use | The one file that connects the real database, password lock and clock to the steps that need them                              |
+| **`packages/shared`**                      | The **menu**, read by the customers and the kitchen alike                                  | The rules for forms ("a title is required, at most 120 characters"), used by the website **and** the API, so they always agree |
+
+#### The one rule: the inside never depends on the outside
+
+Picture the layers as rings, with the most important part in the middle:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  PRESENTATION  (the waiter)  ·  INFRASTRUCTURE  (equipment)  │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  APPLICATION  (the chef's steps)                       │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │  DOMAIN  (the recipes and house rules)           │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Outer rings may use inner rings, never the other way round.** The recipe book (domain) doesn't mention the oven's brand, and the chef's steps (application) say "put it in the fridge", not "put it in the brand X fridge in the corner". So you can change the outside (a new database, a new website, a new way to lock passwords) without rewriting the inside, where the important rules live.
+
+### Follow one action: Maria edits her note
+
+Here's what happens, layer by layer, when Maria changes the title of one of her notes and clicks **Save**. Each step shows the plain-language version and the real (short) piece of code that does it.
+
+```mermaid
+flowchart LR
+    A["Maria clicks Save<br/>(website)"] --> B["Waiter<br/>noteRoutes<br/>(presentation)"]
+    B --> C["Chef's steps<br/>UpdateNote<br/>(application)"]
+    C --> D["House rule<br/>NoteRepository<br/>(domain)"]
+    D --> E["Fridge<br/>PostgresNoteRepository<br/>(infrastructure)"]
+    E --> F[("PostgreSQL<br/>database")]
+```
+
+#### 1. On the website: Maria clicks Save
+
+The website is split the same way. The **page** (presentation) only knows "when Save is clicked, update this note". It doesn't know how the internet works.
+
+`apps/web/src/presentation/components/notes/NoteCard.tsx`
+
+```tsx
+onSubmit={async (input) => {
+  await update.mutateAsync({ id: note.id, input });
+```
+
+The **hook** (application) remembers the notes on screen and refreshes them after a save. The **API file** (infrastructure) does the actual internet call:
+
+`apps/web/src/infrastructure/api/notesApi.ts`
+
+```ts
+export async function updateNote(id: string, input: NoteInput) {
+  const data = await request<{ note: Note }>(`/api/notes/${encodeURIComponent(id)}`, "PUT", input);
+```
+
+> 🍽 The customer gives the order to the waiter. They don't walk into the kitchen.
+
+#### 2. Presentation (the waiter): take the order and check it
+
+The request arrives at the server. The **route** checks three things, then hands the order to the chef. It never touches the database itself.
+
+`apps/api/src/presentation/http/routes/noteRoutes.ts` (the numbered comments are added for this guide)
+
+```ts
+router.put("/notes/:id", async (req, res) => {
+  const id = parseNoteId(req.params.id); // 1. is the note number valid?
+  const content = noteInputSchema.parse(req.body); // 2. is the form filled in correctly?
+  const note = await deps.updateNote.execute(id, currentUserId(req), content); // 3. who's asking? → the chef
+  res.json({ note: noteJson(note) }); // the answer goes back to the website
+});
+```
+
+(Before this, a gatekeeper called `requireAuth` already checked that Maria is logged in.)
+
+> 🍽 "One carbonara for table 4, member card checked." The waiter doesn't cook.
+
+#### 3. Application (the chef's steps): do it, or say why not
+
+The **use case** is the recipe for this one action, in plain steps. It doesn't know about the internet or SQL.
+
+`apps/api/src/application/note/UpdateNote.ts` (the comments are added for this guide)
+
+```ts
+async execute(id: string, userId: string, content: NoteContent) {
+  const note = await this.notes.update(id, userId, content);  // "update Maria's note"
+  if (!note) throw new NoteNotFoundError();                   // "it isn't there" → say so
+  return note;
+}
+```
+
+> 🍽 "Get the dish ready. If we're out of it, tell the waiter."
+
+#### 4. Domain (the house rules): what a note is, and who may touch it
+
+The **domain** describes the business in its own words. Here it says what a note is made of, and that every way of storing notes **must** check the owner: nobody can edit someone else's note.
+
+`apps/api/src/domain/note/NoteRepository.ts`
+
+```ts
+// Every method takes the owner's id: a note can only be read or changed by its owner
+export interface NoteRepository {
+  update(id: string, userId: string, content: NoteContent): Promise<Note | null>;
+```
+
+`apps/api/src/domain/note/errors.ts`
+
+```ts
+// Also used for someone else's note, so nobody learns which note ids exist
+export class NoteNotFoundError extends Error {
+```
+
+An **interface** like `NoteRepository` is a **job description**: "we need someone who can store and find notes, always by owner". It doesn't say how.
+
+> 🍽 House rule: "Each table only gets its own food."
+
+#### 5. Infrastructure (the equipment): actually save it
+
+The **repository** is the one who got the job. It knows SQL and PostgreSQL. Note the `user_id = $2`: the house rule from the domain, done for real.
+
+`apps/api/src/infrastructure/database/PostgresNoteRepository.ts` (the comment is added for this guide)
+
+```sql
+update notes set title = $3, body = $4, updated_at = now()
+where id = $1 and user_id = $2     -- only Maria's own note
+```
+
+> 🍽 The fridge. Any fridge that fits the job description would do.
+
+#### 6. Back to Maria
+
+- **Saved:** the chef returns the note → the waiter sends it back → the page shows the new title.
+- **Not hers, or deleted:** the chef raises `NoteNotFoundError` → the waiter's **error handler** turns it into a polite "404: That note doesn't exist":
+
+`apps/api/src/presentation/http/errorHandler.ts`
+
+```ts
+if (error instanceof NoteNotFoundError) {
+  send(res, 404, { message: error.message });
+```
+
+#### Who connects everyone? The manager (`buildApp.ts`)
+
+The chef's steps only know the **job description** (`NoteRepository`). The manager decides who actually does the job, in one place:
+
+`apps/api/src/buildApp.ts`
+
+```ts
+const notes = new PostgresNoteRepository(options.pool);   // hire the PostgreSQL "fridge"
+updateNote: new UpdateNote(notes),                         // give it to the chef
+```
+
+### Why go to all this trouble?
+
+| Without layers                                                                             | With these layers                                                                                                                |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Database code is mixed into every screen. Changing the database means changing everything. | Only `infrastructure/` knows about PostgreSQL. A new database = a new "fridge" file, and the rest stays the same.                |
+| To test "a note belongs to its owner", you need a real database running.                   | The tests hand the chef a **pretend** fridge or password lock. Hundreds of checks run in seconds, with no database. (See below.) |
+| The same rule ("a title is required") is written in several places, and they drift apart.  | Each rule lives in one place: forms in `packages/shared`, business rules in `domain/`.                                           |
+| Hard to know where to look.                                                                | The folder tells you: "it's about the internet" → presentation; "it's a business rule" → domain.                                 |
+
+**A real example of the testing benefit:** passwords are locked with bcrypt, which is slow on purpose. The tests don't want to wait, so they hand `RegisterUser` a **fake lock** that follows the same job description:
+
+`apps/api/test/unit/useCases.test.ts`
+
+```ts
+// Fakes: use cases only know the interfaces, so tests can swap in simple in-memory versions
+const plainHasher: PasswordHasher = {
+  hash: async (password) => `hashed:${password}`,
+  compare: async (password, hash) => hash === `hashed:${password}`,
+};
+```
+
+`RegisterUser` can't tell the difference, because it only knows the job description (`PasswordHasher` in `application/ports/`), not who does it.
+
+### Where does new code go?
+
+Ask these questions in order:
+
+| Question                                                                            | If yes, it goes in… | Example from this repo                                                                                    |
+| ----------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------- |
+| Is it a **fact or rule of the business** that would be true even without computers? | `domain/`           | "Usernames are compared without capital letters" → `domain/user/rules.ts`                                 |
+| Is it **one thing a person can do**, step by step?                                  | `application/`      | "Register: check the name is free, lock the password, save the user" → `application/user/RegisterUser.ts` |
+| Does it **talk to a specific tool** (database, email, files, a library)?            | `infrastructure/`   | Storing notes in PostgreSQL → `infrastructure/database/PostgresNoteRepository.ts`                         |
+| Is it about **the internet**: addresses, requests, answers, logins?                 | `presentation/`     | The `/api/notes` addresses → `presentation/http/routes/noteRoutes.ts`                                     |
+| Is it a **form rule** both the website and the API need?                            | `packages/shared/`  | "A title is required, at most 120 characters" → `packages/shared/src/notes.ts`                            |
+
+To add a whole new feature, follow [Adding a feature (copy the notes)](#adding-a-feature-copy-the-notes): it walks through the layers in this same order.
+
+### Words you'll see
+
+| Word                     | Plain meaning                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| **Layer**                | A group of files with one job (domain, application, infrastructure, presentation).         |
+| **Entity**               | A thing the business cares about: a `User`, a `Note`.                                      |
+| **Use case**             | One action a person can do: `RegisterUser`, `UpdateNote`. One file each.                   |
+| **Interface** / **port** | A job description: "can store notes", "can lock passwords". Says _what_, not _how_.        |
+| **Repository**           | The one who stores and finds things (here, in PostgreSQL).                                 |
+| **Adapter**              | A real tool that does a job description: `PostgresNoteRepository`, `BcryptPasswordHasher`. |
+| **Route**                | An address the website can call, like `PUT /api/notes/:id`.                                |
+| **Middleware**           | A gatekeeper every request passes first, like `requireAuth` (are you logged in?).          |
+| **Composition root**     | The single place that connects everything: `buildApp.ts`.                                  |
+| **Dependency rule**      | Inner rings never use outer rings: the domain doesn't know about the database.             |
 
 ---
 
