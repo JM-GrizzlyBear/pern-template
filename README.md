@@ -46,7 +46,7 @@ It comes with what almost every app needs (register, log in, log out, protected 
 
 ## Clean Architecture in 1 minute
 
-_For developers. For everyone else: [Clean Architecture, explained simply](#clean-architecture-explained-simply-no-coding-needed)._
+_For developers. For everyone else: [Clean Architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html)._
 
 The code is split into four layers. Each layer only uses the layers **inside** it:
 
