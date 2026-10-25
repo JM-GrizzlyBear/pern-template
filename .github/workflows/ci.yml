@@ -9,11 +9,11 @@ on:
 jobs:
   check:
     name: Type-check, lint and build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.1.0
 
       - uses: actions/setup-node@v5
         with:
@@ -25,11 +25,13 @@ jobs:
       # turbo isn't installed globally on GitHub's machines, so it runs through pnpm exec
       - run: pnpm exec turbo run check-types lint build
 
+      # Fails when a file isn't formatted (for example after an edit on github.com).
+      # Fix it on your computer with: pnpm exec prettier --write .
       - run: pnpm exec prettier --check .
 
   docker:
     name: Docker image builds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: check
     steps:
       - uses: actions/checkout@v5
@@ -38,7 +40,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A throwaway Postgres just for the tests (emptied before every test)
     services:
       postgres:
@@ -59,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.1.0
 
       - uses: actions/setup-node@v5
         with:
